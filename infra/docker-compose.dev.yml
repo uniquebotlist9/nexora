@@ -1,0 +1,72 @@
+# ==============================================================================
+# NEXORA — local development stack: MongoDB (replica set) + Redis only.
+#
+#   docker compose -f infra/docker-compose.dev.yml up -d db redis
+#   docker compose -f infra/docker-compose.dev.yml down
+#
+# Matches the .env defaults:
+#   DATABASE_URL=mongodb://localhost:27017/nexora?replicaSet=rs0
+#   REDIS_URL=redis://localhost:6379
+#
+# The single-node replica set is REQUIRED: the platform uses MongoDB
+# transactions (prisma.$transaction), which only work on replica sets.
+# ==============================================================================
+name: nexora-dev
+
+services:
+  db:
+    image: mongo:7
+    container_name: nexora-dev-db
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--port", "27017"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_dev_data:/data/db
+    healthcheck:
+      # mongod accepts connections. Replica-set readiness is handled by the
+      # db-init service below; a single healthcheck cannot encode both
+      # without creating a circular dependency.
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { db.adminCommand('ping').ok } catch (e) { 0 }"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    restart: unless-stopped
+
+  # One-shot: wait for mongod, then initiate the single-node replica set.
+  # Idempotent — initiating an already-initiated set throws and is ignored.
+  db-init:
+    image: mongo:7
+    container_name: nexora-dev-db-init
+    depends_on:
+      db:
+        condition: service_started
+    entrypoint:
+      - sh
+      - -c
+      - |
+        until mongosh --host db --quiet --eval 'db.adminCommand("ping")' >/dev/null 2>&1; do
+          echo 'waiting for mongod...'; sleep 2
+        done
+        mongosh --host db --quiet --eval 'try { rs.initiate({_id: "rs0", members: [{_id: 0, host: "db:27017"}]}) } catch (e) { print("replica set already initiated") }'
+        echo 'replica set ready'
+    restart: "no"
+
+  redis:
+    image: redis:7-alpine
+    container_name: nexora-dev-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_dev_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  mongo_dev_data:
+  redis_dev_data:

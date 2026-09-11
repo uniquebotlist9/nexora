@@ -1,0 +1,260 @@
+# ==============================================================================
+# NEXORA — full application stack (production-shaped self-hosting).
+#
+# Run from the REPO ROOT so the root .env is picked up:
+#
+#   docker compose --project-directory . -f infra/docker-compose.yml up -d --build
+#   docker compose -f infra/docker-compose.yml ps
+#   docker compose -f infra/docker-compose.yml logs -f api
+#   docker compose -f infra/docker-compose.yml down        # keeps data volumes
+#
+# For local development you usually only need the data services (MongoDB on
+# localhost:27017, Redis on localhost:6379 — matching the .env defaults):
+#
+#   docker compose -f infra/docker-compose.dev.yml up -d db redis
+#
+# First boot of the full stack is automated:
+#   1. db starts as a single-node replica set (rs0) — REQUIRED, because the
+#      platform uses MongoDB transactions (they fail on standalone mongod).
+#   2. db-init waits for mongod, then runs rs.initiate() (idempotent).
+#   3. db-push applies the Prisma schema (prisma db push — this project uses
+#      no migration files) and exits.
+#   4. api / bot / dashboard / admin start once the schema is in place.
+#
+# All app services read the ROOT .env (env_file: ../.env) and override the
+# host-oriented URLs with their in-network equivalents below. No credentials
+# live in this file.
+#
+# Hardening notes for public deployments:
+#   - The MongoDB instance intentionally runs WITHOUT authentication and with
+#     its port unpublished: it is only reachable on the internal compose
+#     network. Before exposing anything, add auth (MONGO_INITDB_ROOT_USERNAME/
+#     PASSWORD + an auth-enabled DATABASE_URL with &authSource=admin) and put
+#     the stack behind a TLS-terminating reverse proxy.
+# ==============================================================================
+name: nexora
+
+networks:
+  nexora:
+    driver: bridge
+
+volumes:
+  mongo_data:
+  redis_data:
+
+services:
+  # --------------------------------------------------------------------------
+  # Data layer
+  # --------------------------------------------------------------------------
+  db:
+    image: mongo:7
+    container_name: nexora-db
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--port", "27017"]
+    # To reach MongoDB from the host (Compass, mongosh), uncomment:
+    # ports:
+    #   - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks: [nexora]
+    restart: unless-stopped
+    healthcheck:
+      # mongod accepts connections. Replica-set readiness is guaranteed by
+      # db-init (below), which every app service waits for explicitly — a
+      # single healthcheck cannot encode "ping AND replica set initiated"
+      # without creating a circular dependency.
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { db.adminCommand('ping').ok } catch (e) { 0 }"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # One-shot: wait for mongod, then initiate the single-node replica set and
+  # wait until it is PRIMARY. Idempotent — rs.initiate() on an
+  # already-initiated set throws and is caught, so restarting is safe.
+  # Every app service waits for this service to complete successfully, which
+  # is what actually gates startup on replica-set readiness.
+  db-init:
+    image: mongo:7
+    container_name: nexora-db-init
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [nexora]
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo 'Initiating replica set rs0 (idempotent)...'
+        mongosh --host db --quiet --eval 'try { rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "db:27017" }] }) } catch (e) { print(e.codeName) }'
+        echo 'Waiting for the replica set to become PRIMARY...'
+        i=0
+        until mongosh --host db --quiet --eval 'try { rs.status().myState } catch (e) { 0 }' | grep -q 1; do
+          i=$$((i + 1))
+          if [ $$i -ge 30 ]; then echo 'ERROR: replica set never became PRIMARY' >&2; exit 1; fi
+          sleep 2
+        done
+        echo 'Replica set rs0 is PRIMARY.'
+
+  # One-shot: apply the Prisma schema to MongoDB (this project uses
+  # `prisma db push` instead of migration files). Runs from the API image's
+  # build stage, which retains the Prisma CLI.
+  db-push:
+    build:
+      context: ..
+      dockerfile: infra/api.Dockerfile
+      target: build
+    container_name: nexora-db-push
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    networks: [nexora]
+    command:
+      - npx
+      - prisma
+      - db
+      - push
+      - --schema
+      - packages/database/prisma/schema.prisma
+      - --skip-generate
+
+  redis:
+    image: redis:7-alpine
+    container_name: nexora-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks: [nexora]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  # --------------------------------------------------------------------------
+  # Application layer — build context is the REPO ROOT (see the Dockerfiles).
+  # --------------------------------------------------------------------------
+  bot:
+    build:
+      context: ..
+      dockerfile: infra/bot.Dockerfile
+    container_name: nexora-bot
+    env_file: ../.env
+    environment:
+      NODE_ENV: production
+      # In-network overrides for the host-oriented .env values.
+      DATABASE_URL: mongodb://db:27017/nexora?replicaSet=rs0
+      REDIS_URL: redis://redis:6379
+      API_URL: http://api:4000
+      DASHBOARD_URL: ${DASHBOARD_URL:-http://localhost:3000}
+      ADMIN_URL: ${ADMIN_URL:-http://localhost:3001}
+    networks: [nexora]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-push:
+        condition: service_completed_successfully
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/api.Dockerfile
+    container_name: nexora-api
+    env_file: ../.env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mongodb://db:27017/nexora?replicaSet=rs0
+      REDIS_URL: redis://redis:6379
+      DASHBOARD_URL: ${DASHBOARD_URL:-http://localhost:3000}
+      ADMIN_URL: ${ADMIN_URL:-http://localhost:3001}
+    ports:
+      - "4000:4000" # GET /health, REST API
+    networks: [nexora]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-push:
+        condition: service_completed_successfully
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: infra/dashboard.Dockerfile
+    container_name: nexora-dashboard
+    env_file: ../.env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mongodb://db:27017/nexora?replicaSet=rs0
+      REDIS_URL: redis://redis:6379
+      # API_URL is server-side (container-to-container); DASHBOARD_URL is the
+      # browser-facing origin used for OAuth redirects and API CORS.
+      API_URL: http://api:4000
+      DASHBOARD_URL: ${DASHBOARD_URL:-http://localhost:3000}
+    ports:
+      - "3000:3000"
+    networks: [nexora]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      db-push:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+
+  admin:
+    build:
+      context: ..
+      dockerfile: infra/admin.Dockerfile
+    container_name: nexora-admin
+    env_file: ../.env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mongodb://db:27017/nexora?replicaSet=rs0
+      API_URL: http://api:4000
+      ADMIN_URL: ${ADMIN_URL:-http://localhost:3001}
+    ports:
+      - "3001:3001"
+    networks: [nexora]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      db-push:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+
+  # --------------------------------------------------------------------------
+  # One-shot tooling (start explicitly):
+  #   docker compose -f infra/docker-compose.yml run --rm deploy-commands            # global
+  #   docker compose -f infra/docker-compose.yml run --rm deploy-commands 1234567890 # one guild
+  # --------------------------------------------------------------------------
+  deploy-commands:
+    build:
+      context: ..
+      dockerfile: infra/bot.Dockerfile
+      target: build
+    container_name: nexora-deploy-commands
+    profiles: [tools]
+    env_file: ../.env
+    environment:
+      DATABASE_URL: mongodb://db:27017/nexora?replicaSet=rs0
+    networks: [nexora]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    # Extra arguments after `run --rm deploy-commands` are forwarded to the
+    # script, e.g. a guild ID for instant guild-scoped registration.
+    command: ["npx", "tsx", "apps/bot/src/scripts/deploy-commands.ts"]

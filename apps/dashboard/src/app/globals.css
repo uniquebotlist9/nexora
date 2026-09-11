@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light theme (class strategy — `dark` is the default, see layout) */
+    --background: 220 25% 97%;
+    --foreground: 230 30% 8%;
+    --card: 0 0% 100%;
+    --card-foreground: 230 30% 8%;
+    --muted: 220 18% 92%;
+    --muted-foreground: 225 12% 42%;
+    --primary: 235 86% 65%; /* #5865F2 */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 18% 93%;
+    --secondary-foreground: 230 30% 12%;
+    --accent: 235 86% 94%;
+    --accent-foreground: 235 86% 35%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 225 15% 86%;
+    --input: 225 15% 84%;
+    --ring: 235 86% 65%;
+    --radius: 0.625rem;
+  }
+
+  .dark {
+    /* Dark-first premium aesthetic — deep slate / near-black */
+    --background: 245 30% 4%; /* #09090f */
+    --foreground: 225 20% 94%;
+    --card: 245 25% 6%;
+    --card-foreground: 225 20% 94%;
+    --muted: 245 20% 10%;
+    --muted-foreground: 228 12% 62%;
+    --primary: 235 86% 65%; /* #5865F2 */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 245 20% 12%;
+    --secondary-foreground: 225 20% 94%;
+    --accent: 245 22% 14%;
+    --accent-foreground: 235 90% 82%;
+    --destructive: 0 72% 58%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 245 15% 15%;
+    --input: 245 15% 18%;
+    --ring: 235 86% 65%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+
+  ::selection {
+    background: rgba(88, 101, 242, 0.35);
+  }
+}
+
+@layer utilities {
+  /* Glassy card surface */
+  .glass {
+    @apply bg-card/60 backdrop-blur-xl border border-white/10;
+  }
+
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-[#5865F2] to-[#8B5CF6];
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 9999px;
+  }
+
+  .focus-ring {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
+}
+
+/* Recharts focus outlines are noisy for decorative charts */
+.recharts-wrapper svg:focus,
+.recharts-surface:focus {
+  outline: none;
+}

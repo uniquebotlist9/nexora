@@ -1,0 +1,32 @@
+{
+  "name": "nexora",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Nexora — Powerful Automation. Smarter Communities. Enterprise Discord bot platform.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build:packages && npm run build -w @nexora/bot -w @nexora/api --if-present && npm run build -w @nexora/dashboard -w @nexora/admin --if-present",
+    "build:packages": "npm run build -w @nexora/types && npm run build -w @nexora/config && npm run build -w @nexora/logger && npm run build -w @nexora/cache && npm run build -w @nexora/permissions && npm run build -w @nexora/validation && npm run build -w @nexora/discord && npm run build -w @nexora/ui && npm run build -w @nexora/database",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:bot": "npm run dev -w @nexora/bot",
+    "dev:api": "npm run dev -w @nexora/api",
+    "dev:dashboard": "npm run dev -w @nexora/dashboard",
+    "dev:admin": "npm run dev -w @nexora/admin",
+    "db:push": "prisma db push --schema packages/database/prisma/schema.prisma",
+    "db:generate": "prisma generate --schema packages/database/prisma/schema.prisma",
+    "db:studio": "npm run studio -w @nexora/database",
+    "test": "npm run build:packages && vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}
