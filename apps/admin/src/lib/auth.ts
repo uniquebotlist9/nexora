@@ -1,6 +1,5 @@
 import type { NextAuthOptions } from 'next-auth';
 import DiscordProvider from 'next-auth/providers/discord';
-import { requireEnv } from '@nexora/config';
 import { prisma } from '@nexora/database';
 import { isAdminRole } from '@nexora/types';
 
@@ -34,7 +33,9 @@ const cookieOptions = {
 } as const;
 
 export const authOptions: NextAuthOptions = {
-  secret: requireEnv('AUTH_SECRET_ADMIN'),
+  // Read lazily (not requireEnv) so `next build` succeeds without runtime
+  // secrets — next-auth fails loudly at request time if it is missing.
+  secret: process.env.AUTH_SECRET_ADMIN,
   providers: [
     DiscordProvider({
       clientId: process.env.DISCORD_CLIENT_ID ?? '',
