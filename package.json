@@ -12,7 +12,8 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build:packages && npm run build -w @nexora/bot -w @nexora/api --if-present && npm run build -w @nexora/dashboard -w @nexora/admin --if-present",
+    "postinstall": "prisma generate --schema packages/database/prisma/schema.prisma || echo WARN: prisma generate failed - if dev servers are running they lock the engine DLL, stop them and run: npm run db:generate",
+    "build": "npm run db:generate && npm run build:packages && npm run build -w @nexora/bot -w @nexora/api --if-present && npm run build -w @nexora/dashboard -w @nexora/admin --if-present",
     "build:packages": "npm run build -w @nexora/types && npm run build -w @nexora/config && npm run build -w @nexora/logger && npm run build -w @nexora/cache && npm run build -w @nexora/permissions && npm run build -w @nexora/validation && npm run build -w @nexora/discord && npm run build -w @nexora/ui && npm run build -w @nexora/database",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "dev:bot": "npm run dev -w @nexora/bot",
